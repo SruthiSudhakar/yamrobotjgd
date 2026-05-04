@@ -18,6 +18,7 @@ class CanInterface:
         use_buffered_reader: bool = False,
     ):
         self.bus = can.interface.Bus(bustype=bustype, channel=channel, bitrate=bitrate)
+        self.channel = channel
         self.busstate = self.bus.state
         self.name = name
         self.receive_mode = receive_mode

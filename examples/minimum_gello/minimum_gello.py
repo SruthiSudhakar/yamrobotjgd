@@ -1,3 +1,4 @@
+import threading
 import time
 from dataclasses import dataclass
 from typing import Dict, Literal, Optional
@@ -115,6 +116,9 @@ class Args:
     bilateral_kp: float = 0.0
     ee_mass: Optional[float] = None
     """Override end-effector (link_6) mass in kg for gravity compensation. Defaults to the value in the XML."""
+    button_server: bool = False
+    """In leader mode, expose the teaching-handle button state on a portal server (default port 11334)."""
+    button_server_port: int = 11334
 
 
 def main(args: Args) -> None:
@@ -131,8 +135,16 @@ def main(args: Args) -> None:
         robot_current_kp = robot._robot._kp
         client_robot = ClientRobot(args.server_port, host=args.server_host)
 
+        latest_button = np.zeros(2, dtype=np.float32)
+        if args.button_server:
+            btn_server = portal.Server(args.button_server_port)
+            btn_server.bind("get_button_state", lambda: latest_button.copy())
+            threading.Thread(target=btn_server.start, daemon=True).start()
+            print(f"Leader button server listening on port {args.button_server_port}")
+
         # sync the robot state
         current_joint_pos, current_button = robot.get_info()
+        latest_button[:] = current_button
         current_follower_joint_pos = client_robot.get_joint_pos()
         print(f"Current leader joint pos: {current_joint_pos}")
         print(f"Current follower joint pos: {current_follower_joint_pos}")
@@ -147,6 +159,7 @@ def main(args: Args) -> None:
         synchronized = False
         while True:
             current_joint_pos, current_button = robot.get_info()
+            latest_button[:] = current_button
             if current_button[0] > 0.5:
                 if not synchronized:
                     robot.update_kp_kd(kp=robot_current_kp * args.bilateral_kp, kd=np.ones(6) * 0.0)
@@ -160,6 +173,7 @@ def main(args: Args) -> None:
                 while current_button[0] > 0.5:
                     time.sleep(0.03)
                     current_joint_pos, current_button = robot.get_info()
+                    latest_button[:] = current_button
 
             current_follower_joint_pos = client_robot.get_joint_pos()
 
