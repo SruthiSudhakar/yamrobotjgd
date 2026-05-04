@@ -16,6 +16,13 @@ from typing import Any
 import numpy as np
 import portal
 
+try:
+    import cv2
+    import pyrealsense2 as rs
+    _HAVE_REALSENSE = True
+except ImportError:
+    _HAVE_REALSENSE = False
+
 
 class ClientRobot:
     """Portal client for a minimum_gello follower server."""
@@ -49,7 +56,23 @@ def main(stdscr: Any) -> None:
                         help="Host of the leader's button server (run leader with --button_server).")
     parser.add_argument("--button-server-port", type=int, default=0,
                         help="Port of the leader's button server. 0 disables button polling.")
+    parser.add_argument("--realsense", action="store_true",
+                        help="Capture a RealSense color frame for every recorded joint sample.")
+    parser.add_argument("--rs-width", type=int, default=1280)
+    parser.add_argument("--rs-height", type=int, default=720)
+    parser.add_argument("--rs-fps", type=int, default=30)
     args, _ = parser.parse_known_args()
+
+    rs_pipeline = None
+    if args.realsense:
+        if not _HAVE_REALSENSE:
+            raise SystemExit("--realsense requires pyrealsense2 and opencv-python")
+        rs_pipeline = rs.pipeline()
+        rs_cfg = rs.config()
+        rs_cfg.enable_stream(rs.stream.color, args.rs_width, args.rs_height, rs.format.bgr8, args.rs_fps)
+        rs_pipeline.start(rs_cfg)
+    latest_color = None
+    frames: list = []
 
     button_client = None
     last_btn1 = 0.0
@@ -68,7 +91,7 @@ def main(stdscr: Any) -> None:
     recording = False
     replaying = False
     replay_idx = 0
-    target_freq = 60.0
+    target_freq = 30.0
     dt = 1.0 / target_freq
 
     if args.load and os.path.exists(args.load):
@@ -101,6 +124,14 @@ def main(stdscr: Any) -> None:
     while True:
         current_time = time.monotonic()
 
+        # Pull the freshest RealSense color frame, if streaming.
+        if rs_pipeline is not None:
+            fs = rs_pipeline.poll_for_frames()
+            if fs:
+                c = fs.get_color_frame()
+                if c:
+                    latest_color = np.asanyarray(c.get_data())
+
         # Poll leader button[1]: toggle recording on release (1 -> 0).
         if button_client is not None:
             try:
@@ -114,6 +145,7 @@ def main(stdscr: Any) -> None:
                 if recording:
                     trajectory = []
                     timestamps = []
+                    frames = []
                     last_record_time = current_time
                 stdscr.addstr(len(instructions) + 2, 0, f"Recording: {recording} (button)   ")
             last_btn1 = btn1
@@ -129,6 +161,7 @@ def main(stdscr: Any) -> None:
                 if recording:
                     trajectory = []
                     timestamps = []
+                    frames = []
                     last_record_time = current_time
                 stdscr.addstr(len(instructions) + 2, 0, f"Recording: {recording}         ")
             elif key == ord("p"):
@@ -141,11 +174,6 @@ def main(stdscr: Any) -> None:
                     stdscr.addstr(len(instructions) + 2, 0, "No trajectory to replay.      ")
             elif key == ord("s"):
                 if len(trajectory) > 0:
-                    data = {
-                        "trajectory": np.array(trajectory),
-                        "timestamps": np.array(timestamps),
-                        "frequency": target_freq,
-                    }
                     if args.auto_timestamp:
                         stem, ext = os.path.splitext(args.output)
                         ext = ext or ".npy"
@@ -153,6 +181,25 @@ def main(stdscr: Any) -> None:
                         out_path = f"{stem}_{stamp}{ext}"
                     else:
                         out_path = args.output
+                    data = {
+                        "trajectory": np.array(trajectory),
+                        "timestamps": np.array(timestamps),
+                        "frequency": target_freq,
+                    }
+                    if rs_pipeline is not None and frames:
+                        out_dir = os.path.dirname(os.path.abspath(out_path))
+                        stem_only = os.path.splitext(os.path.basename(out_path))[0]
+                        frames_dir = os.path.join(out_dir, f"{stem_only}_frames")
+                        os.makedirs(frames_dir, exist_ok=True)
+                        image_paths = []
+                        for i, img in enumerate(frames):
+                            rel = os.path.join(f"{stem_only}_frames", f"frame_{i:06d}.jpg")
+                            if img is not None:
+                                cv2.imwrite(os.path.join(out_dir, rel), img)
+                                image_paths.append(rel)
+                            else:
+                                image_paths.append("")
+                        data["image_paths"] = np.array(image_paths)
                     np.save(out_path, data)
                     stdscr.addstr(len(instructions) + 2, 0, f"Saved to {out_path}        ")
                 else:
@@ -203,6 +250,8 @@ def main(stdscr: Any) -> None:
             qpos = robot.get_joint_pos()
             trajectory.append(np.copy(qpos))
             timestamps.append(current_time)
+            if rs_pipeline is not None:
+                frames.append(None if latest_color is None else latest_color.copy())
             last_record_time = current_time
 
         if replaying and len(trajectory) > 0:
@@ -219,6 +268,9 @@ def main(stdscr: Any) -> None:
 
         stdscr.refresh()
         time.sleep(0.02)
+
+    if rs_pipeline is not None:
+        rs_pipeline.stop()
 
 
 if __name__ == "__main__":

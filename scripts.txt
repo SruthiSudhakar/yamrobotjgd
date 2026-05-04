@@ -15,5 +15,9 @@ python examples/record_replay_trajectory/record_replay_trajectory.py --channel c
 start recroding new:
 python examples/record_replay_trajectory/record_replay_trajectory_client.py --button-server-port 11334 --auto-timestamp --channel can0 --gripper linear_4310
 
+python examples/record_replay_trajectory/record_replay_trajectory_client.py --button-server-port 11334 --auto-timestamp --output ./test/run.npy --realsense --channel can0 --gripper linear_4310
+
+
+
 start playback:
 python examples/record_replay_trajectory/record_replay_trajectory_client.py

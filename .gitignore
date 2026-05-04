@@ -99,3 +99,4 @@ docs/public/models/
 
 
 *.npy
+test/
