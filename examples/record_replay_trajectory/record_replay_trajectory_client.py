@@ -10,8 +10,9 @@ import argparse
 import curses
 import datetime
 import os
+import threading
 import time
-from typing import Any
+from typing import Any, List, Optional, Tuple
 
 import numpy as np
 import portal
@@ -22,6 +23,95 @@ try:
     _HAVE_REALSENSE = True
 except ImportError:
     _HAVE_REALSENSE = False
+
+
+class Sampler(threading.Thread):
+    """Fixed-rate sampler thread.
+
+    Owns the RealSense pipeline polling and the per-tick joint RPC. Runs at an
+    absolute deadline schedule so the loop rate doesn't drift with curses or
+    button-server overhead. Buffers samples in memory until stop_recording().
+    """
+
+    def __init__(self, robot, rs_pipeline, hz: float, portal_lock: threading.Lock) -> None:
+        super().__init__(daemon=True)
+        self.robot = robot
+        self.rs_pipeline = rs_pipeline
+        self.hz = hz
+        self.dt = 1.0 / hz
+        self.portal_lock = portal_lock
+        self._record = threading.Event()
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self.traj: List[np.ndarray] = []
+        self.ts: List[float] = []
+        self.frames: List[Optional[np.ndarray]] = []
+        self._latest_color: Optional[np.ndarray] = None
+
+    def start_recording(self) -> None:
+        with self._lock:
+            self.traj.clear()
+            self.ts.clear()
+            self.frames.clear()
+        self._record.set()
+
+    def stop_recording(self) -> Tuple[List[np.ndarray], List[float], List[Optional[np.ndarray]]]:
+        self._record.clear()
+        # Acquiring the lock waits for any in-flight append to finish.
+        with self._lock:
+            return list(self.traj), list(self.ts), list(self.frames)
+
+    def current_count(self) -> int:
+        with self._lock:
+            return len(self.traj)
+
+    def shutdown(self) -> None:
+        self._stop.set()
+        self._record.set()  # wake the thread out of any wait
+
+    def run(self) -> None:
+        next_deadline: Optional[float] = None
+        while not self._stop.is_set():
+            if not self._record.is_set():
+                self._record.wait(timeout=0.1)
+                next_deadline = None
+                continue
+            if self._stop.is_set():
+                break
+            if next_deadline is None:
+                next_deadline = time.monotonic()
+
+            now = time.monotonic()
+            sleep_for = next_deadline - now
+            if sleep_for > 0 and self._stop.wait(timeout=sleep_for):
+                break
+            if not self._record.is_set():
+                next_deadline = None
+                continue
+
+            if self.rs_pipeline is not None:
+                fs = self.rs_pipeline.poll_for_frames()
+                if fs:
+                    c = fs.get_color_frame()
+                    if c:
+                        self._latest_color = np.asanyarray(c.get_data())
+
+            try:
+                with self.portal_lock:
+                    qpos = self.robot.get_joint_pos()
+            except Exception:
+                next_deadline += self.dt
+                continue
+
+            with self._lock:
+                self.traj.append(np.copy(qpos))
+                self.ts.append(next_deadline)
+                if self.rs_pipeline is not None:
+                    self.frames.append(None if self._latest_color is None else self._latest_color.copy())
+
+            next_deadline += self.dt
+            if time.monotonic() - next_deadline > self.dt:
+                next_deadline = time.monotonic()
 
 
 class ClientRobot:
@@ -71,8 +161,6 @@ def main(stdscr: Any) -> None:
         rs_cfg = rs.config()
         rs_cfg.enable_stream(rs.stream.color, args.rs_width, args.rs_height, rs.format.bgr8, args.rs_fps)
         rs_pipeline.start(rs_cfg)
-    latest_color = None
-    frames: list = []
 
     button_client = None
     last_btn1 = 0.0
@@ -80,19 +168,24 @@ def main(stdscr: Any) -> None:
         button_client = portal.Client(f"{args.button_server_host}:{args.button_server_port}")
 
     robot = ClientRobot(args.server_host, args.server_port)
+    portal_lock = threading.Lock()
 
     # Curses setup
     curses.curs_set(0)
     stdscr.nodelay(True)
     stdscr.timeout(0)
 
-    trajectory = []
-    timestamps = []
+    trajectory: list = []
+    timestamps: list = []
+    frames: list = []
     recording = False
     replaying = False
     replay_idx = 0
     target_freq = 30.0
     dt = 1.0 / target_freq
+
+    sampler = Sampler(robot, rs_pipeline, target_freq, portal_lock)
+    sampler.start()
 
     if args.load and os.path.exists(args.load):
         try:
@@ -118,19 +211,21 @@ def main(stdscr: Any) -> None:
         "Status:",
     ]
 
-    last_record_time = time.monotonic()
     last_replay_time = time.monotonic()
+
+    def begin_recording() -> None:
+        nonlocal recording, replaying
+        sampler.start_recording()
+        recording = True
+        replaying = False
+
+    def end_recording() -> None:
+        nonlocal recording, trajectory, timestamps, frames
+        trajectory, timestamps, frames = sampler.stop_recording()
+        recording = False
 
     while True:
         current_time = time.monotonic()
-
-        # Pull the freshest RealSense color frame, if streaming.
-        if rs_pipeline is not None:
-            fs = rs_pipeline.poll_for_frames()
-            if fs:
-                c = fs.get_color_frame()
-                if c:
-                    latest_color = np.asanyarray(c.get_data())
 
         # Poll leader button[1]: toggle recording on release (1 -> 0).
         if button_client is not None:
@@ -140,13 +235,10 @@ def main(stdscr: Any) -> None:
             except Exception:
                 btn1 = last_btn1
             if last_btn1 > 0.5 and btn1 < 0.5:
-                recording = not recording
-                replaying = False
                 if recording:
-                    trajectory = []
-                    timestamps = []
-                    frames = []
-                    last_record_time = current_time
+                    end_recording()
+                else:
+                    begin_recording()
                 stdscr.addstr(len(instructions) + 2, 0, f"Recording: {recording} (button)   ")
             last_btn1 = btn1
 
@@ -156,13 +248,10 @@ def main(stdscr: Any) -> None:
             if key == ord("q"):
                 break
             elif key == ord("r"):
-                recording = not recording
-                replaying = False
                 if recording:
-                    trajectory = []
-                    timestamps = []
-                    frames = []
-                    last_record_time = current_time
+                    end_recording()
+                else:
+                    begin_recording()
                 stdscr.addstr(len(instructions) + 2, 0, f"Recording: {recording}         ")
             elif key == ord("p"):
                 if len(trajectory) > 0:
@@ -243,22 +332,17 @@ def main(stdscr: Any) -> None:
         for i, line in enumerate(instructions):
             stdscr.addstr(i, 0, line)
         stdscr.addstr(len(instructions), 0, f"Recording: {recording}  Replaying: {replaying}")
-        stdscr.addstr(len(instructions) + 1, 0, f"Trajectory length: {len(trajectory)} samples")
+        live_count = sampler.current_count() if recording else len(trajectory)
+        stdscr.addstr(len(instructions) + 1, 0, f"Trajectory length: {live_count} samples")
         stdscr.addstr(len(instructions) + 3, 0, "Press 'q' to quit.")
-
-        if recording and (current_time - last_record_time) >= dt:
-            qpos = robot.get_joint_pos()
-            trajectory.append(np.copy(qpos))
-            timestamps.append(current_time)
-            if rs_pipeline is not None:
-                frames.append(None if latest_color is None else latest_color.copy())
-            last_record_time = current_time
 
         if replaying and len(trajectory) > 0:
             if replay_idx == 0:
-                robot.move_joints(np.array(trajectory[replay_idx]), time_interval_s=1.5)
+                with portal_lock:
+                    robot.move_joints(np.array(trajectory[replay_idx]), time_interval_s=1.5)
             if replay_idx < len(trajectory) and (current_time - last_replay_time) >= dt:
-                robot.command_joint_pos(trajectory[replay_idx])
+                with portal_lock:
+                    robot.command_joint_pos(trajectory[replay_idx])
                 replay_idx += 1
                 last_replay_time = current_time
                 stdscr.addstr(len(instructions) + 4, 0, f"Replaying: {replay_idx}/{len(trajectory)}")
@@ -269,6 +353,8 @@ def main(stdscr: Any) -> None:
         stdscr.refresh()
         time.sleep(0.02)
 
+    sampler.shutdown()
+    sampler.join(timeout=1.0)
     if rs_pipeline is not None:
         rs_pipeline.stop()
 
