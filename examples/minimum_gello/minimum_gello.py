@@ -30,6 +30,10 @@ class ServerRobot:
         self._server.bind("command_joint_pos", self._robot.command_joint_pos)
         self._server.bind("command_joint_state", self._robot.command_joint_state)
         self._server.bind("get_observations", self._robot.get_observations)
+        if hasattr(self._robot, "schedule_waypoint"):
+            self._server.bind("schedule_waypoint", self._robot.schedule_waypoint)
+        if hasattr(self._robot, "clear_waypoints"):
+            self._server.bind("clear_waypoints", self._robot.clear_waypoints)
 
     def serve(self) -> None:
         """Serve the leader robot."""

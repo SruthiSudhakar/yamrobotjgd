@@ -13,6 +13,7 @@ from i2rt.motor_drivers.dm_driver import (
     MotorInfo,
     PassiveEncoderInfo,
 )
+from i2rt.robots.joint_trajectory_interpolator import JointTrajectoryInterpolator
 from i2rt.robots.robot import Robot
 from i2rt.robots.utils import GripperForceLimiter, GripperType, JointMapper, detect_gripper_limits
 from i2rt.utils.mujoco_utils import MuJoCoKDL
@@ -198,6 +199,10 @@ class MotorChainRobot(Robot):
 
         self._command_lock = threading.Lock()
         self._state_lock = threading.Lock()
+        self._interp_lock = threading.Lock()
+        self._interp: Optional[JointTrajectoryInterpolator] = None
+        self._last_waypoint_time: float = 0.0
+        self._max_joint_speed: float = 1.0  # rad/s, per-joint L_inf safety cap
         self._joint_state: Optional[JointStates] = None
         while self._joint_state is None:
             # wait to recive joint data
@@ -287,6 +292,16 @@ class MotorChainRobot(Robot):
         while not self._stop_event.is_set():  # Check the stop event
             current_time = time.time()
             elapsed_time = current_time - last_time
+
+            # If a joint trajectory is scheduled, drive the setpoint from the
+            # interpolator at this tick (~250 Hz, well above the 125 Hz the
+            # diffusion-policy paper uses). The interpolator object is
+            # immutable, so we take a snapshot under the lock and query it
+            # outside.
+            with self._interp_lock:
+                interp = self._interp
+            if interp is not None:
+                self.command_joint_pos(interp(time.monotonic()))
 
             self.update()
             if not self.motor_chain.running:
@@ -513,6 +528,49 @@ class MotorChainRobot(Robot):
             self._commands.pos = self.remapper.to_robot_joint_pos_space(pos)
             self._commands.kp = self._kp
             self._commands.kd = self._kd
+
+    def schedule_waypoint(
+        self,
+        joint_target: np.ndarray,
+        target_time: float,
+        max_speed: Optional[float] = None,
+    ) -> None:
+        """Schedule a joint-space waypoint reached at wall-clock target_time.
+
+        While at least one waypoint is scheduled, the gravity-comp loop drives
+        the joint setpoint from the interpolator on every tick (~250 Hz).
+        target_time is in time.time() units; converted to monotonic internally.
+        """
+        joint_target = self._clip_robot_joint_pos_command(np.asarray(joint_target, dtype=np.float64))
+        speed = self._max_joint_speed if max_speed is None else float(max_speed)
+        target_time_mono = time.monotonic() - time.time() + float(target_time)
+        with self._interp_lock:
+            curr_time = time.monotonic()
+            if self._interp is None:
+                with self._state_lock:
+                    q0 = self._joint_state.pos.copy()
+                self._interp = JointTrajectoryInterpolator(
+                    times=np.array([curr_time]), joints=q0[None, :]
+                )
+                self._last_waypoint_time = curr_time
+            self._interp = self._interp.schedule_waypoint(
+                joints=joint_target,
+                time=target_time_mono,
+                max_speed=speed,
+                curr_time=curr_time,
+                last_waypoint_time=self._last_waypoint_time,
+            )
+            self._last_waypoint_time = max(self._last_waypoint_time, target_time_mono)
+
+    def clear_waypoints(self) -> None:
+        """Drop the scheduled trajectory; falls back to direct command_joint_pos.
+
+        The current setpoint is left untouched, so the robot holds the last
+        commanded pose until a new command_joint_pos / schedule_waypoint call.
+        """
+        with self._interp_lock:
+            self._interp = None
+            self._last_waypoint_time = 0.0
 
     def command_joint_state(self, joint_state: Dict[str, np.ndarray]) -> None:
         """Command the leader robot to a given state.
