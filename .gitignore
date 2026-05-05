@@ -100,3 +100,7 @@ docs/public/models/
 
 *.npy
 test/
+expert_data_jgd/
+expert_data_jgd_10_worldmodel.zip
+test_20260504-230757_frames/
+epoch=0000-train_loss=0.6701.ckpt

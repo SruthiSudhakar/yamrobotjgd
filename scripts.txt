@@ -1,23 +1,19 @@
 start follower:
 python examples/minimum_gello/minimum_gello.py   --gripper linear_4310   --mode follower   --can-channel can0   --bilateral_kp 0.2
-
 start leader: 
-python examples/minimum_gello/minimum_gello.py \
---gripper yam_teaching_handle \
---mode leader \
---can_channel can2 \
---bilateral_kp 0.05 \
---button_server
+python examples/minimum_gello/minimum_gello.py --gripper yam_teaching_handle --mode leader --can_channel can2 --bilateral_kp 0.05 --button_server
 
-start recroding old: 
-python examples/record_replay_trajectory/record_replay_trajectory.py --channel can0 --gripper linear_4310
-
-start recroding new:
-python examples/record_replay_trajectory/record_replay_trajectory_client.py --button-server-port 11334 --auto-timestamp --channel can0 --gripper linear_4310
-
-python examples/record_replay_trajectory/record_replay_trajectory_client.py --button-server-port 11334 --auto-timestamp --output ./test/run.npy --realsense --channel can0 --gripper linear_4310
-
-
+start recroding:
+python examples/record_replay_trajectory/record_replay_trajectory_client.py --button-server-port 11334 --auto-timestamp --realsense --channel can0 --gripper linear_4310 --output ./test.npy
 
 start playback:
 python examples/record_replay_trajectory/record_replay_trajectory_client.py
+
+
+
+copy over:
+rsync -avh --info=progress2 /home/cvlabusers/Appaji/i2rt/expert_data_jgd/ sruthi@cv16.cs.columbia.edu:/proj/vondrick3/datasets/VLMjgd/
+
+rsync -avh --info=progress2 \
+sruthi@cv16.cs.columbia.edu:/proj/vondrick3/sruthi/Appaji/diffusion_policy/data/jgd/2026.05.05/13.22.36_train_diffusion_unet_hybrid_pnp_lego_image \
+/home/cvlabusers/Appaji/diffusion_policy/data/jgd/2026.05.05

@@ -138,7 +138,7 @@ def main(stdscr: Any) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--server-host", type=str, default="127.0.0.1")
     parser.add_argument("--server-port", type=int, default=11333)
-    parser.add_argument("--output", type=str, default="./example_trajectory.npy")
+    parser.add_argument("--output", type=str, default="./expert_data_jgd/PnPRedLegoToBrownBowl/success_N.npy")
     parser.add_argument("--load", type=str, help="Load trajectory from file")
     parser.add_argument("--auto-timestamp", action="store_true",
                         help="Append a UTC timestamp to --output on each save so a new file is written every time.")
