@@ -26,3 +26,19 @@ rsync -avh --info=progress2 \
 /home/cvlabusers/Appaji/i2rt/expert_data_jgd/PnPRedLegoToBrownBowl/{failure,success}_{302..320}_* \
 sruthi@cv16.cs.columbia.edu:/proj/vondrick3/datasets/VLMjgd/PnPRedLegoToBrownBowl/ \
 --dry-run
+
+
+
+
+
+
+
+
+
+PushT:
+python scripts/keyboard_teleop_planar.py \
+--gripper-down \
+--z 0.2 \
+--home-xy 0.35 0.00 \
+--x-range 0.25 0.45 \
+--y-range -0.15 0.10
