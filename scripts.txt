@@ -4,16 +4,25 @@ start leader:
 python examples/minimum_gello/minimum_gello.py --gripper yam_teaching_handle --mode leader --can_channel can2 --bilateral_kp 0.05 --button_server
 
 start recroding:
-python examples/record_replay_trajectory/record_replay_trajectory_client.py --button-server-port 11334 --auto-timestamp --realsense --channel can0 --gripper linear_4310 --output ./test.npy
+python examples/record_replay_trajectory/record_replay_trajectory_client.py --button-server-port 11334 --auto-timestamp --realsense --channel can0 --gripper linear_4310 --output ./expert_data_jgd/PnPRedLegoToBrownBowl/success_302.npy
 
 start playback:
 python examples/record_replay_trajectory/record_replay_trajectory_client.py
 
+overlay:
+python scripts_pnp_lego/realsense_overlay.py --ref /path/to/run/observations/frame_000000.jpg
 
+
+/home/cvlabusers/Appaji/diffusion_policy/data/jgd/2026.05.06/23.17.10_train_diffusion_unet_hybrid_pnp_lego_image/checkpoints/epoch=0200-train_loss=0.0116/2026-05-09_14-30-00_VLM/videogen/2026-05-09_14-30-00_000002/3.mp4
 
 copy over:
 rsync -avh --info=progress2 /home/cvlabusers/Appaji/i2rt/expert_data_jgd/ sruthi@cv16.cs.columbia.edu:/proj/vondrick3/datasets/VLMjgd/
 
 rsync -avh --info=progress2 \
-sruthi@cv16.cs.columbia.edu:/proj/vondrick3/sruthi/Appaji/diffusion_policy/data/jgd/2026.05.05/13.22.36_train_diffusion_unet_hybrid_pnp_lego_image \
-/home/cvlabusers/Appaji/diffusion_policy/data/jgd/2026.05.05
+sruthi@cv16.cs.columbia.edu:/proj/vondrick3/sruthi/Appaji/diffusion_policy/data/jgd/2026.05.07/11.41.24_train_diffusion_unet_hybrid_pnp_lego_image_only/checkpoints/epoch=0700-train_loss=0.0126.ckpt \
+/home/cvlabusers/Appaji/diffusion_policy/data/jgd/2026.05.07/11.41.24_train_diffusion_unet_hybrid_pnp_lego_image_only/checkpoints
+
+rsync -avh --info=progress2 \
+/home/cvlabusers/Appaji/i2rt/expert_data_jgd/PnPRedLegoToBrownBowl/{failure,success}_{302..320}_* \
+sruthi@cv16.cs.columbia.edu:/proj/vondrick3/datasets/VLMjgd/PnPRedLegoToBrownBowl/ \
+--dry-run
