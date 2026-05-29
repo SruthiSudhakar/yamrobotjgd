@@ -123,6 +123,8 @@ class Args:
     button_server: bool = False
     """In leader mode, expose the teaching-handle button state on a portal server (default port 11334)."""
     button_server_port: int = 11334
+    gravity_comp_factor: Optional[float] = None
+    """Override gravity_comp_factor on the underlying MotorChainRobot. Default uses the per-arm value."""
 
 
 def main(args: Args) -> None:
@@ -130,6 +132,9 @@ def main(args: Args) -> None:
 
     if "remote" not in args.mode:
         robot = get_yam_robot(channel=args.can_channel, gripper_type=gripper_type, ee_mass=args.ee_mass)
+        if args.gravity_comp_factor is not None:
+            print(f"Overriding gravity_comp_factor: {robot.gravity_comp_factor} -> {args.gravity_comp_factor}")
+            robot.gravity_comp_factor = args.gravity_comp_factor
 
     if args.mode == "follower":
         server_robot = ServerRobot(robot, args.server_port)
@@ -140,15 +145,25 @@ def main(args: Args) -> None:
         client_robot = ClientRobot(args.server_port, host=args.server_host)
 
         latest_button = np.zeros(2, dtype=np.float32)
+        latest_leader_joint = np.zeros(7, dtype=np.float64)
+        latest_leader_joint_lock = threading.Lock()
+
+        def _get_leader_joint_pos() -> np.ndarray:
+            with latest_leader_joint_lock:
+                return latest_leader_joint.copy()
+
         if args.button_server:
             btn_server = portal.Server(args.button_server_port)
             btn_server.bind("get_button_state", lambda: latest_button.copy())
+            btn_server.bind("get_joint_pos", _get_leader_joint_pos)
             threading.Thread(target=btn_server.start, daemon=True).start()
-            print(f"Leader button server listening on port {args.button_server_port}")
+            print(f"Leader button + joint server listening on port {args.button_server_port}")
 
         # sync the robot state
         current_joint_pos, current_button = robot.get_info()
         latest_button[:] = current_button
+        with latest_leader_joint_lock:
+            latest_leader_joint[:] = current_joint_pos
         current_follower_joint_pos = client_robot.get_joint_pos()
         print(f"Current leader joint pos: {current_joint_pos}")
         print(f"Current follower joint pos: {current_follower_joint_pos}")
@@ -178,6 +193,11 @@ def main(args: Args) -> None:
                     time.sleep(0.03)
                     current_joint_pos, current_button = robot.get_info()
                     latest_button[:] = current_button
+                    with latest_leader_joint_lock:
+                        latest_leader_joint[:] = current_joint_pos
+
+            with latest_leader_joint_lock:
+                latest_leader_joint[:] = current_joint_pos
 
             current_follower_joint_pos = client_robot.get_joint_pos()
 

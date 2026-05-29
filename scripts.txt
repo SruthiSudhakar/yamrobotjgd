@@ -4,7 +4,11 @@ start leader:
 python examples/minimum_gello/minimum_gello.py --gripper yam_teaching_handle --mode leader --can_channel can2 --bilateral_kp 0.05 --button_server
 
 start recroding:
-python examples/record_replay_trajectory/record_replay_trajectory_client.py --button-server-port 11334 --auto-timestamp --realsense --channel can0 --gripper linear_4310 --output ./expert_data_jgd/PnPRedLegoToBrownBowl/success_302.npy
+python examples/record_replay_trajectory/record_replay_trajectory_client.py \
+--leader-server-port 11334 \
+--button-server-port 11334 \
+--auto-timestamp --realsense --channel can0 --gripper linear_4310 \
+--output ./expert_data_jgd_stacking/random_9.npy
 
 start playback:
 python examples/record_replay_trajectory/record_replay_trajectory_client.py
@@ -22,7 +26,7 @@ rsync -avh --info=progress2 \
 sruthi@cv16.cs.columbia.edu:/proj/vondrick3/sruthi/Appaji/diffusion_policy/data/jgd/2026.05.07/11.41.24_train_diffusion_unet_hybrid_pnp_lego_image_only/checkpoints/epoch=0700-train_loss=0.0126.ckpt \
 /home/cvlabusers/Appaji/diffusion_policy/data/jgd/2026.05.07/11.41.24_train_diffusion_unet_hybrid_pnp_lego_image_only/checkpoints
 
-rsync -avh --info=progress2 \
-/home/cvlabusers/Appaji/i2rt/expert_data_jgd/PnPRedLegoToBrownBowl/{failure,success}_{302..320}_* \
-sruthi@cv16.cs.columbia.edu:/proj/vondrick3/datasets/VLMjgd/PnPRedLegoToBrownBowl/ \
+rsync -avh --info=progress2 --exclude='*cam0' \
+/home/cvlabusers/Appaji/i2rt/expert_data_jgd_UprightBottle/{failure,success}_{121..147}_* \
+sruthi@cv16.cs.columbia.edu:/proj/vondrick3/datasets/expert_data_jgd_UprightBottle \
 --dry-run
